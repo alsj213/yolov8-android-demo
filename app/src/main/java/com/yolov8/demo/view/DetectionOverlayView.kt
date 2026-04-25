@@ -37,11 +37,26 @@ class DetectionOverlayView @JvmOverloads constructor(
     private var results: List<DetectorResult> = emptyList()
     private var scaleX = 1f
     private var scaleY = 1f
+    private var offsetX = 0f
+    private var offsetY = 0f
 
     fun setResults(results: List<DetectorResult>, imageWidth: Int, imageHeight: Int) {
         this.results = results
-        scaleX = width / imageWidth.toFloat()
-        scaleY = height / imageHeight.toFloat()
+        // 检测坐标是基于原始图像尺寸的 (imageWidth x imageHeight)
+        // 需要缩放到当前 View 的尺寸，保持比例居中
+        val scale = minOf(width.toFloat() / imageWidth, height.toFloat() / imageHeight)
+
+        // 计算居中偏移
+        val scaledW = imageWidth * scale
+        val scaledH = imageHeight * scale
+        val offsetX = (width - scaledW) / 2f
+        val offsetY = (height - scaledH) / 2f
+
+        scaleX = scale
+        scaleY = scale
+        this.offsetX = offsetX
+        this.offsetY = offsetY
+
         invalidate()
     }
 
@@ -49,10 +64,10 @@ class DetectionOverlayView @JvmOverloads constructor(
         super.onDraw(canvas)
 
         for (result in results) {
-            val x1 = result.x1 * scaleX
-            val y1 = result.y1 * scaleY
-            val x2 = result.x2 * scaleX
-            val y2 = result.y2 * scaleY
+            val x1 = result.x1 * scaleX + offsetX
+            val y1 = result.y1 * scaleY + offsetY
+            val x2 = result.x2 * scaleX + offsetX
+            val y2 = result.y2 * scaleY + offsetY
 
             // Draw bounding box
             canvas.drawRect(x1, y1, x2, y2, boxPaint)

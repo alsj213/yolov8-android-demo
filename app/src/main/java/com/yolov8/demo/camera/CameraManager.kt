@@ -23,9 +23,11 @@ class CameraManager(
     private var onFrameListener: ((Bitmap) -> Unit)? = null
 
     fun startCamera() {
+        Log.d("CameraManager", "启动相机...")
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener({
             val cameraProvider = cameraProviderFuture.get()
+            Log.d("CameraManager", "获取CameraProvider成功")
 
             val preview = Preview.Builder()
                 .build()
@@ -34,7 +36,6 @@ class CameraManager(
                 }
 
             val imageAnalysis = ImageAnalysis.Builder()
-                .setTargetResolution(android.util.Size(640, 640))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
                 .also {

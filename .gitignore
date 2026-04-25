@@ -14,7 +14,13 @@ local.properties
 *.pt
 *.pth
 *.bin
+*.mnn
 app/src/main/res/raw/*.onnx
+app/src/main/res/raw/*.mnn
+
+# MNN prebuilt libs (large)
+third_party/mnn/libs/*.so
+app/src/main/jniLibs/*/*.so
 
 # Windows scripts
 *.bat

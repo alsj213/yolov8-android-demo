@@ -1,6 +1,7 @@
 package com.yolov8.demo.detector
 
 import android.content.Context
+import android.os.Build
 import android.os.SystemClock
 import ai.onnxruntime.*
 import com.yolov8.demo.utils.ImageUtils
@@ -14,14 +15,27 @@ import java.nio.FloatBuffer
 class YOLOv8Detector(
     private val context: Context,
     private val useNNAPI: Boolean = false,
+    private val useQNN: Boolean = false,
     private val numThreads: Int = 4
-) {
+) : Detector {
     private var ortSession: OrtSession? = null
     private var ortEnvironment: OrtEnvironment? = null
 
-    val inputSize = 640
-    val confThreshold = 0.25f
+    override val inputSize = 640
+    val confThreshold = 0.4f  // 提高置信度阈值，减少误检
     val iouThreshold = 0.45f
+
+    override val backendName = buildString {
+        append("ORT-")
+        when {
+            useQNN -> append("QNN")
+            useNNAPI -> append("NNAPI")
+            else -> append("CPU")
+        }
+        if (!useNNAPI && !useQNN) {
+            append("($numThreads-threads)")
+        }
+    }
 
     // COCO 80 classes
     private val classNames = listOf(
@@ -36,18 +50,43 @@ class YOLOv8Detector(
         "teddy bear", "hair drier", "toothbrush"
     )
 
-    suspend fun init() = withContext(Dispatchers.IO) {
+    override suspend fun init() = withContext(Dispatchers.IO) {
         try {
-            ortEnvironment = OrtEnvironment.getEnvironment()
+            // 先关闭已有的 session
+            close()
+
+            // 打印系统信息
+            android.util.Log.d("YOLOv8", "设备: ${Build.MANUFACTURER} ${Build.MODEL}, SDK: ${Build.VERSION.SDK_INT}")
+
+            // ONNX Runtime Environment 是全局单例，只需要获取一次
+            if (ortEnvironment == null) {
+                ortEnvironment = OrtEnvironment.getEnvironment()
+            }
 
             val sessionOptions = OrtSession.SessionOptions()
-            sessionOptions.setIntraOpNumThreads(numThreads)
-            sessionOptions.setInterOpNumThreads(2)
 
-            // Enable NNAPI if requested
-            if (useNNAPI) {
-                sessionOptions.addConfigEntry("session.use_nnapi", "1")
-                sessionOptions.addConfigEntry("session.nnapi.use_fp16", "1")
+            when {
+                useQNN -> {
+                    // QNN 模式：当前 ONNX Runtime 版本暂不支持公开的 QNN EP API
+                    // 回退到 NNAPI 模式（在骁龙 865 上 NNAPI 实际会使用 QNN 后端）
+                    sessionOptions.setIntraOpNumThreads(1)
+                    sessionOptions.setInterOpNumThreads(1)
+                    sessionOptions.addNnapi()
+                    android.util.Log.d("YOLOv8", "使用 NNAPI (QNN 后端) 加速")
+                }
+                useNNAPI -> {
+                    // NNAPI 模式：禁用 CPU 多线程，让硬件加速器独占
+                    sessionOptions.setIntraOpNumThreads(1)
+                    sessionOptions.setInterOpNumThreads(1)
+                    sessionOptions.addNnapi()
+                    android.util.Log.d("YOLOv8", "使用 NNAPI 硬件加速 (单线程)")
+                }
+                else -> {
+                    // CPU 模式：设置多线程优化
+                    sessionOptions.setIntraOpNumThreads(numThreads)
+                    sessionOptions.setInterOpNumThreads(1)  // 减少间操作线程
+                    android.util.Log.d("YOLOv8", "使用 CPU 模式 ($numThreads 线程)")
+                }
             }
 
             sessionOptions.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
@@ -57,7 +96,7 @@ class YOLOv8Detector(
 
         } catch (e: Exception) {
             e.printStackTrace()
-            throw RuntimeException("Failed to initialize ONNX Runtime", e)
+            throw RuntimeException("Failed to initialize ONNX Runtime: ${e.message}", e)
         }
     }
 
@@ -66,64 +105,91 @@ class YOLOv8Detector(
         val outputFile = File(context.filesDir, modelFileName)
 
         if (!outputFile.exists()) {
-            context.resources.openRawResource(
-                context.resources.getIdentifier("yolov8n", "raw", context.packageName)
-            ).use { input ->
+            android.util.Log.d("YOLOv8", "正在复制模型文件到 ${outputFile.absolutePath}")
+            val resourceId = context.resources.getIdentifier("yolov8n", "raw", context.packageName)
+            android.util.Log.d("YOLOv8", "资源ID: $resourceId, package: ${context.packageName}")
+
+            context.resources.openRawResource(resourceId).use { input ->
                 FileOutputStream(outputFile).use { output ->
-                    input.copyTo(output)
+                    val copied = input.copyTo(output)
+                    android.util.Log.d("YOLOv8", "复制了 $copied 字节")
                 }
             }
         }
+        android.util.Log.d("YOLOv8", "模型文件大小: ${outputFile.length()} 字节")
         return outputFile
     }
 
-    suspend fun detect(bitmap: android.graphics.Bitmap): DetectionResult = withContext(Dispatchers.Default) {
+    override suspend fun detect(bitmap: android.graphics.Bitmap): DetectionResult = withContext(Dispatchers.Default) {
         val startTime = SystemClock.elapsedRealtimeNanos()
 
-        val resizedBitmap = ImageUtils.resizeBitmap(bitmap, inputSize, inputSize)
-        val floatArray = ImageUtils.bitmapToFloatBuffer(resizedBitmap, inputSize)
+        // Letterbox 预处理，保持宽高比
+        val preprocessResult = ImageUtils.bitmapToFloatBuffer(bitmap, inputSize)
+        val floatArray = preprocessResult.floatArray
 
         val inputName = ortSession!!.inputNames.first()
         val inputShape = longArrayOf(1, 3, inputSize.toLong(), inputSize.toLong())
 
+        // 创建 FloatBuffer
+        val buffer = java.nio.ByteBuffer.allocateDirect(floatArray.size * 4)
+            .order(java.nio.ByteOrder.nativeOrder())
+            .asFloatBuffer()
+            .put(floatArray)
+            .rewind() as java.nio.FloatBuffer
+
         val inputTensor = OnnxTensor.createTensor(
             ortEnvironment,
-            FloatBuffer.wrap(floatArray),
+            buffer,
             inputShape
         )
 
         val output = ortSession!!.run(mapOf(inputName to inputTensor))
-        val outputTensor = output.get(0).value as Array<*>
+        // Shape: [1, 84, 8400] - batch, features, anchors
+        val rawOutput = output.get(0).value as Array<*>  // 第一层: batch dimension
+        val outputTensor = rawOutput[0] as Array<FloatArray>  // 第二层: [84, 8400]
 
-        val results = parseOutput(outputTensor, bitmap.width, bitmap.height)
+        // 坐标从640x640空间映射回原始图像空间
+        // 先减去padding，再除以scale
+        val results = parseOutput(outputTensor, preprocessResult.scale, preprocessResult.padX, preprocessResult.padY)
 
         val inferenceTime = (SystemClock.elapsedRealtimeNanos() - startTime) / 1_000_000f
 
         output.close()
         inputTensor.close()
 
-        DetectionResult(results, inferenceTime)
+        DetectionResult(results, inferenceTime, preprocessResult.scale, preprocessResult.padX, preprocessResult.padY)
     }
 
-    private fun parseOutput(output: Array<*>, imgWidth: Int, imgHeight: Int): List<DetectorResult> {
-        val predictions = output[0] as Array<*>
+    private fun parseOutput(
+        output: Array<FloatArray>,
+        scale: Float,
+        padX: Float,
+        padY: Float
+    ): List<DetectorResult> {
+        // Output shape: [84, 8400]
+        // 84 = 4 bbox coords (cx, cy, w, h) + 80 class scores
+        // coords are relative to 640x640 input size
         val numClasses = 80
-        val numDetections = predictions[0] as? FloatArray ?: return emptyList()
-
         val results = mutableListOf<DetectorResult>()
 
-        // Output shape: [1, 84, 8400] - 84 = 4 bbox coords + 80 class scores
-        for (i in 0 until 8400) {
-            val x = (predictions[0] as FloatArray)[i]
-            val y = (predictions[1] as FloatArray)[i]
-            val w = (predictions[2] as FloatArray)[i]
-            val h = (predictions[3] as FloatArray)[i]
+        if (output.size < 84) {
+            android.util.Log.e("YOLOv8", "输出尺寸错误: ${output.size} < 84")
+            return emptyList()
+        }
 
+        for (i in 0 until 8400) {
+            // cx, cy, w, h - in [0, 640] range (letterbox后的坐标)
+            val cx = output[0][i]
+            val cy = output[1][i]
+            val w = output[2][i]
+            val h = output[3][i]
+
+            // Find max class score
             var maxClassScore = 0f
             var maxClassId = 0
 
             for (c in 0 until numClasses) {
-                val score = (predictions[4 + c] as FloatArray)[i]
+                val score = output[4 + c][i]
                 if (score > maxClassScore) {
                     maxClassScore = score
                     maxClassId = c
@@ -131,23 +197,22 @@ class YOLOv8Detector(
             }
 
             if (maxClassScore > confThreshold) {
-                val scaleX = imgWidth / inputSize.toFloat()
-                val scaleY = imgHeight / inputSize.toFloat()
 
-                val x1 = (x - w / 2) * scaleX
-                val y1 = (y - h / 2) * scaleY
-                val x2 = (x + w / 2) * scaleX
-                val y2 = (y + h / 2) * scaleY
+                // 先减去letterbox的padding，再缩放到原始图像尺寸
+                val x1 = (cx - w / 2 - padX) / scale
+                val y1 = (cy - h / 2 - padY) / scale
+                val x2 = (cx + w / 2 - padX) / scale
+                val y2 = (cy + h / 2 - padY) / scale
 
                 results.add(
                     DetectorResult(
                         classId = maxClassId,
                         className = classNames[maxClassId],
                         confidence = maxClassScore,
-                        x1 = x1.coerceIn(0f, imgWidth.toFloat()),
-                        y1 = y1.coerceIn(0f, imgHeight.toFloat()),
-                        x2 = x2.coerceIn(0f, imgWidth.toFloat()),
-                        y2 = y2.coerceIn(0f, imgHeight.toFloat())
+                        x1 = x1,
+                        y1 = y1,
+                        x2 = x2,
+                        y2 = y2
                     )
                 )
             }
@@ -156,13 +221,13 @@ class YOLOv8Detector(
         return NMSUtils.nonMaxSuppression(results, iouThreshold)
     }
 
-    fun close() {
-        ortSession?.close()
-        ortEnvironment?.close()
+    override fun close() {
+        try {
+            ortSession?.close()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        ortSession = null
+        // 注意: ortEnvironment 是全局单例，不要关闭
     }
-
-    data class DetectionResult(
-        val results: List<DetectorResult>,
-        val inferenceTimeMs: Float
-    )
 }
