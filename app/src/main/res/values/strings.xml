@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">YOLOv8 ORT</string>
+    <string name="camera_permission_required">相机权限是必需的</string>
+    <string name="fps_format">FPS: %.1f</string>
+    <string name="inference_time_format">推理: %.1fms</string>
+    <string name="cpu_mode">CPU模式</string>
+    <string name="nnapi_mode">NNAPI模式</string>
+    <string name="switch_mode">切换模式</string>
+</resources>
