@@ -55,32 +55,21 @@ class MNNDetector(
 
     override suspend fun init(): Unit = withContext(Dispatchers.IO) {
         try {
-            android.util.Log.e("MNN", "========== 开始初始化 MNN 检测器 ==========")
-            android.util.Log.e("MNN", "后端名称: $backendName")
-
-            // 先加载 MNN 库
-            android.util.Log.e("MNN", "1. 开始加载 MNN 库...")
+            // 加载 MNN 库
             if (!com.taobao.android.mnn.MNNNetNative.loadLibraries()) {
                 throw RuntimeException("Failed to load MNN libraries")
             }
-            android.util.Log.e("MNN", "   MNN 库加载成功 ✓")
 
-            // 复制模型到 files 目录
-            android.util.Log.e("MNN", "2. 开始加载模型文件...")
+            // 加载模型文件
             val modelFile = getModelFile()
-            android.util.Log.e("MNN", "   模型路径: ${modelFile.absolutePath}")
-            android.util.Log.e("MNN", "   模型大小: ${modelFile.length()} 字节")
 
-            // 加载 MNN 模型
-            android.util.Log.e("MNN", "3. 开始创建 MNNNetInstance...")
+            // 创建 MNNNetInstance
             mnnNet = MNNNetInstance.createFromFile(modelFile.absolutePath)
             if (mnnNet == null) {
                 throw RuntimeException("Failed to load MNN model: MNNNetInstance.createFromFile returned null")
             }
-            android.util.Log.e("MNN", "   MNNNetInstance 创建成功 ✓")
 
-            // 创建 session
-            android.util.Log.e("MNN", "4. 开始创建 Session...")
+            // 创建 Session
             val config = MNNNetInstance.Config()
             config.numThread = numThreads
             val forwardType = when {
@@ -89,36 +78,22 @@ class MNNDetector(
                 else -> MNNForwardType.FORWARD_CPU.type
             }
             config.forwardType = forwardType
-            android.util.Log.e("MNN", "   线程数: $numThreads, forwardType: $forwardType")
 
             mnnSession = mnnNet!!.createSession(config)
             if (mnnSession == null) {
                 throw RuntimeException("Failed to create MNN session: createSession returned null")
             }
-            android.util.Log.e("MNN", "   Session 创建成功 ✓")
 
             // 获取输入输出张量
-            android.util.Log.e("MNN", "5. 获取输入输出张量...")
             inputTensor = mnnSession!!.getInput("images")
-            android.util.Log.e("MNN", "   输入张量: ${if (inputTensor != null) "✓" else "✗ (null)"}")
-            android.util.Log.e("MNN", "   输入张量维度: ${inputTensor?.getDimensions()?.contentToString()}")
-
             outputTensor = mnnSession!!.getOutput("output0")
             if (outputTensor == null) {
-                android.util.Log.w("MNN", "   output0 不存在，尝试 output...")
                 outputTensor = mnnSession!!.getOutput("output")
             }
-            android.util.Log.e("MNN", "   输出张量: ${if (outputTensor != null) "✓" else "✗ (null)"}")
-            android.util.Log.e("MNN", "   输出张量维度: ${outputTensor?.getDimensions()?.contentToString()}")
-
-            android.util.Log.e("MNN", "========== MNN 初始化成功 ==========")
 
         } catch (e: UnsatisfiedLinkError) {
-            android.util.Log.e("MNN", "MNN 库加载失败 (UnsatisfiedLinkError): ${e.message}", e)
             throw RuntimeException("MNN library not available", e)
         } catch (e: Exception) {
-            android.util.Log.e("MNN", "MNN 初始化异常: ${e.message}", e)
-            e.printStackTrace()
             throw RuntimeException("Failed to initialize MNN: ${e.message}", e)
         }
     }
@@ -128,9 +103,7 @@ class MNNDetector(
         val outputFile = File(context.filesDir, modelFileName)
 
         if (!outputFile.exists()) {
-            android.util.Log.d("MNN", "正在复制 MNN 模型文件...")
             try {
-                // 先尝试从 raw 资源加载 MNN 模型
                 val resourceId = R.raw.yolov8n_mnn
                 if (resourceId != 0) {
                     context.resources.openRawResource(resourceId).use { input ->
@@ -139,11 +112,9 @@ class MNNDetector(
                         }
                     }
                 } else {
-                    // 如果没有 MNN 模型，抛出异常让上层处理
                     throw RuntimeException("MNN model not found. Please convert YOLOv8n ONNX to MNN format.")
                 }
             } catch (e: Exception) {
-                android.util.Log.e("MNN", "复制模型失败: ${e.message}")
                 throw e
             }
         }

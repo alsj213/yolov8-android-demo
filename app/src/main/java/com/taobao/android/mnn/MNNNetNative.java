@@ -1,48 +1,31 @@
 package com.taobao.android.mnn;
 
 import android.graphics.Bitmap;
-import android.util.Log;
 
 public class MNNNetNative {
-    private static final String TAG = "MNN";
     private static boolean sLibraryLoaded = false;
 
-    static {
-        Log.d(TAG, "MNNNetNative static init");
-    }
-
-    // load libraries
     static void loadGpuLibrary(String name) {
         try {
             System.loadLibrary(name);
-            Log.d(TAG, "Loaded GPU library: " + name);
-        } catch (Throwable ce) {
-            Log.w(TAG, "load MNN " + name + " GPU so exception: " + ce.getMessage());
+        } catch (Throwable ignored) {
         }
     }
 
     public static synchronized boolean loadLibraries() {
         if (sLibraryLoaded) {
-            Log.d(TAG, "MNN libraries already loaded");
             return true;
         }
-        Log.d(TAG, "Start loading MNN libraries...");
         try {
-            Log.d(TAG, "Loading c++_shared...");
             System.loadLibrary("c++_shared");
-            Log.d(TAG, "Loading MNN...");
             System.loadLibrary("MNN");
-            Log.d(TAG, "Loading MNN JNI core...");
             System.loadLibrary("mnncore");
-            Log.d(TAG, "Loading GPU libraries...");
             loadGpuLibrary("MNN_Vulkan");
             loadGpuLibrary("MNN_CL");
             loadGpuLibrary("MNN_GL");
             sLibraryLoaded = true;
-            Log.d(TAG, "MNN libraries loaded successfully");
             return true;
         } catch (Throwable e) {
-            Log.e(TAG, "Failed to load MNN libraries: " + e.getMessage(), e);
             return false;
         }
     }

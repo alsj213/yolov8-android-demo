@@ -77,8 +77,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        android.util.Log.d("YOLOv8", "========= onCreate 开始 =========")
-        android.util.Log.d("YOLOv8", "后端列表: $backends, 数量: ${backends.size}")
         setContentView(R.layout.activity_main)
 
         previewView = findViewById(R.id.previewView)
@@ -88,7 +86,6 @@ class MainActivity : AppCompatActivity() {
         modeText = findViewById(R.id.modeText)
         switchModeBtn = findViewById(R.id.switchModeBtn)
 
-        // 先更新UI，确保Activity显示正常
         fpsText.text = "FPS: --"
         inferenceText.text = "推理: --ms"
 
@@ -102,14 +99,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun checkPermissions() {
-        android.util.Log.d("YOLOv8", "检查权限...")
-        android.util.Log.d("YOLOv8", "后端列表: $backends, 数量: ${backends.size}")
         val requiredPermissions = mutableListOf(Manifest.permission.CAMERA)
 
         val missingPermissions = requiredPermissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
-        android.util.Log.d("YOLOv8", "缺失权限: $missingPermissions")
 
         if (missingPermissions.isNotEmpty()) {
             activityResultLauncher.launch(missingPermissions.toTypedArray())
@@ -128,11 +122,9 @@ class MainActivity : AppCompatActivity() {
 
     private suspend fun initDetector() = withContext(Dispatchers.IO) {
         val backend = backends[currentBackendIndex]
-        android.util.Log.d("YOLOv8", "开始初始化检测器, 后端=$backend")
         try {
             detector?.close()
 
-            // 根据后端类型创建检测器
             detector = when (backend) {
                 BackendType.ORT_CPU -> {
                     YOLOv8Detector(this@MainActivity, useNNAPI = false, useQNN = false)
@@ -155,14 +147,10 @@ class MainActivity : AppCompatActivity() {
             }
 
             detector?.init()
-            android.util.Log.d("YOLOv8", "检测器初始化成功: ${detector?.backendName}")
 
         } catch (e: Exception) {
-            android.util.Log.e("YOLOv8", "检测器初始化失败: ${e.message}", e)
-
             // 如果当前后端失败，回退到 ORT_CPU
             if (backend != BackendType.ORT_CPU) {
-                android.util.Log.w("YOLOv8", "$backend 不可用，回退到 ORT_CPU")
                 currentBackendIndex = 0
                 detector = YOLOv8Detector(this@MainActivity, useNNAPI = false, useQNN = false)
                 detector?.init()
@@ -183,23 +171,11 @@ class MainActivity : AppCompatActivity() {
         cameraManager.startCamera()
     }
 
-    private var firstFrame = true
-
     private fun processFrame(bitmap: android.graphics.Bitmap) {
         lifecycleScope.launch(Dispatchers.Default) {
             try {
-                // 检查 detector 是否可用
                 val currentDetector = detector ?: return@launch
-
                 val result = currentDetector.detect(bitmap)
-
-                // 打印调试信息
-                if (firstFrame) {
-                    firstFrame = false
-                    android.util.Log.d("YOLOv8", "===== 推理结果 =====")
-                    android.util.Log.d("YOLOv8", "推理时间: ${result.inferenceTimeMs}ms")
-                    android.util.Log.d("YOLOv8", "检测到物体数量: ${result.detections.size}")
-                }
 
                 withContext(Dispatchers.Main) {
                     detectionOverlay.setResults(result.detections, bitmap.width, bitmap.height)
@@ -209,9 +185,6 @@ class MainActivity : AppCompatActivity() {
                     fpsText.text = getString(R.string.fps_format, fpsMonitor.getFPS())
                     inferenceText.text = getString(R.string.inference_time_format, fpsMonitor.getAvgInferenceTime())
                 }
-            } catch (e: Exception) {
-                android.util.Log.e("YOLOv8", "推理错误", e)
-                e.printStackTrace()
             } finally {
                 isProcessing = false
             }
@@ -220,21 +193,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun toggleMode() {
         if (isSwitchingMode) return
-        android.util.Log.e("YOLOv8", "========== 切换模式, 当前索引: $currentBackendIndex, 后端总数: ${backends.size}")
-        android.util.Log.e("YOLOv8", "后端列表: $backends")
 
         isSwitchingMode = true
         fpsMonitor.reset()
 
         lifecycleScope.launch {
-            // 等待当前帧处理完成
             while (isProcessing) {
                 kotlinx.coroutines.delay(10)
             }
 
-            // 切换到下一个后端
             currentBackendIndex = (currentBackendIndex + 1) % backends.size
-            android.util.Log.e("YOLOv8", "切换到索引: $currentBackendIndex, 后端: ${backends[currentBackendIndex]}")
             initDetector()
 
             withContext(Dispatchers.Main) {
